@@ -2,7 +2,7 @@
 
 The aim is to bring FIRE numbers closer to reliable, realistic estimates that point in a clear direction without implying a smooth path to reach them.
 
-A local-first, editable FIRE projection and travel-budget planner. Inputs are saved in the current browser using `localStorage`; the app has no backend and does not send financial data to a server. Export/import a JSON file to back up or move a plan.
+A local-first, editable FIRE projection and travel-budget planner. Inputs are saved in the current browser using `localStorage`; the app has no backend and does not send financial data to a server. Export/import a JSON file to back up or move a plan. Saved and imported plans are validated at runtime; older plans inherit defaults for fields they do not contain.
 
 ## How this project is built
 

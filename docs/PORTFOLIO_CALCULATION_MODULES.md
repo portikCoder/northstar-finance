@@ -4,7 +4,7 @@ This note describes the implementation boundaries for the Simple and Power user 
 
 ## Runtime flow
 
-1. `PlanInputs` in `src/model.ts` is the persisted plan contract. `App.tsx` edits those inputs, displays derived assumptions, and recalculates projections.
+1. `PlanInputs` in `src/model.ts` is the persisted plan contract. `planPersistence.ts` parses, validates, and migrates stored/imported plans. `App.tsx` edits those inputs, displays derived assumptions, and recalculates projections.
 2. In Simple setup, the model uses one portfolio-wide nominal return, fee, volatility, and distribution yield.
 3. In Power user setup, the current equity/bond mix allocates the starting balance; the target mix directs positive contributions. Each sleeve has editable nominal return, volatility, fee, and distribution yield. The correlation input is used for aggregate volatility and Monte Carlo path generation.
 4. `projectRetirement` and its private simulation apply each sleeve's real monthly return, contribution/cash-flow rules, and the selected rebalancing schedule. FIRE targets and drawdown targets use the weighted target-mix assumptions. Dividend-only targets use the weighted target yield; retirement cash income uses the opening balance and yield of each sleeve.
@@ -16,6 +16,7 @@ This note describes the implementation boundaries for the Simple and Power user 
 | Module | Responsibility | Main exports | Tests |
 | --- | --- | --- | --- |
 | `src/portfolioAllocation.ts` | Current/target weight allocation, sleeve returns, positive contributions, pro-rata cash outflows, and rebalancing | `allocateStartingBalance`, `allocateContribution`, `applySleeveReturns`, `applyPortfolioCashflow`, `rebalanceToTargetWeights` | `src/portfolioAllocation.test.ts` |
+| `src/powerPortfolio.ts` | Canonical equity/bond sleeve definitions, current/target weights, and symmetric correlation matrix shared by the model paths | `buildPowerPortfolioConfiguration` | `src/powerPortfolio.test.ts` |
 | `src/portfolioSleeves.ts` | Weight-normalized gross return, weighted fees, net nominal return, distribution yield, and covariance-based volatility | `calculatePortfolioSleeveAssumptions` | `src/portfolioSleeves.test.ts` |
 | `src/portfolioComparison.ts` | Outcome deltas from a selected baseline while preserving scenario order | `comparePortfolioOutcomes` | `src/portfolioComparison.test.ts` |
 | `src/portfolioSequence.ts` | Seeded correlated lognormal monthly returns, Cholesky factorization, and correlation-matrix validation | `iteratePortfolioSequenceRuns`, `generatePortfolioSequence` | `src/portfolioSequence.test.ts` |
@@ -33,7 +34,12 @@ The Monte Carlo integration uses `iteratePortfolioSequenceRuns` so only one run'
 - **Distributions:** Sleeve cash yields are not added on top of total return during accumulation. In dividend-only retirement, the model computes cash from each sleeve's opening balance and yield, applies the effective dividend-tax input, spends distributions up to the need, and does not sell principal to cover a shortfall.
 - **Correlation:** The current planner exposes one equity/bond correlation. The path generator validates the supplied matrix and supports positive-semidefinite matrices; the UI's two-sleeve matrix is symmetric with diagonal values of one.
 - **Monte Carlo:** Seeded paths are reproducible for a given input set. Sleeve returns are sampled jointly using the correlation matrix; each simulation run is processed independently. Results remain assumption-driven scenarios, not forecasts.
-- **Persistence compatibility:** New setup fields live in `PlanInputs`, `localStorage`, and JSON export. Loading and importing plans merge stored values over `DEFAULT_INPUTS`, so older plans inherit defaults for fields they do not contain.
+- **Persistence compatibility:** New setup fields live in `PlanInputs`, `localStorage`, and JSON export. Loading and importing plans validate known fields and merge older shapes over fresh `DEFAULT_INPUTS` copies, so missing fields inherit defaults while malformed values are rejected.
+
+## Gradual file split
+
+- `App.tsx` remains the page-level composition and state orchestration. `FormControls.tsx` owns shared field/tooltip widgets, and `planPersistence.ts` owns storage parsing and validation. Next, move the interactive projection chart into its own presentation module, then consider grouping the power-setup and travel UI as separate components.
+- `model.ts` remains the public calculation API while focused modules take ownership of independent concerns. `powerPortfolio.ts` now provides the canonical sleeve/correlation configuration consumed by weighted assumptions, deterministic returns, and Monte Carlo. The next extraction candidate is the deterministic projection engine; preserve existing `model.ts` exports as a facade and retain the current model-level tests while moving one responsibility at a time.
 
 ## Verification
 

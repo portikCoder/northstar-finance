@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
+import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react'
 import {
   addMonths,
   annualInvestableProfit,
   calculateTravelAllowance,
   currentPortfolioEur,
   currentUnrealizedGainEur,
-  DEFAULT_INPUTS,
   fireTargetAtAge,
   formatFireAge,
   portfolioAssumptions,
@@ -17,6 +16,8 @@ import {
 } from './model'
 import type { DisplayCurrency, IncomeStream, MonteCarloSummary, PlanInputs, RetirementMode, Scenario } from './model'
 import { comparePortfolioOutcomes } from './portfolioComparison'
+import { createDefaultPlanInputs, loadSavedPlan, parsePlanInputs } from './planPersistence'
+import { InfoTip, InputField } from './FormControls'
 
 type NumericKey = {
   [Key in keyof PlanInputs]: PlanInputs[Key] extends number ? Key : never
@@ -43,16 +44,6 @@ const MODE_META: Record<RetirementMode, { title: string; short: string; color: s
   },
 }
 
-function loadSavedPlan(): PlanInputs {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return DEFAULT_INPUTS
-    return { ...DEFAULT_INPUTS, ...JSON.parse(raw) } as PlanInputs
-  } catch {
-    return DEFAULT_INPUTS
-  }
-}
-
 function formatMoney(value: number, currency: DisplayCurrency, compact = false): string {
   if (!Number.isFinite(value)) return '—'
   return new Intl.NumberFormat('en-IE', {
@@ -67,65 +58,6 @@ function formatDate(months: number | null, endAge?: number): string {
   if (months === null) return endAge === undefined ? 'Not reached' : `Not by age ${endAge}`
   return new Intl.DateTimeFormat('en-GB', { month: 'short', year: 'numeric' }).format(
     addMonths(new Date(), months),
-  )
-}
-
-function InfoTip({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <span className="info-tip-wrap">
-      <button type="button" className="info-dot" aria-label={`More information: ${label}`}>i</button>
-      <span className="info-tooltip" role="tooltip">
-        <b>{label}</b>
-        <span>{children}</span>
-      </span>
-    </span>
-  )
-}
-
-function InputField({
-  label,
-  name,
-  value,
-  onChange,
-  step = 'any',
-  min = 0,
-  max,
-  suffix,
-  hint,
-  info,
-}: {
-  label: string
-  name: string
-  value: number
-  onChange: (value: number) => void
-  step?: string
-  min?: number
-  max?: number
-  suffix?: string
-  hint?: string
-  info?: ReactNode
-}) {
-  return (
-    <div className="input-field">
-      <span className="label-row">
-        <label className="input-label" htmlFor={name}>{label}</label>
-        {info && <InfoTip label={label}>{info}</InfoTip>}
-      </span>
-      <span className="input-wrap">
-        <input
-          id={name}
-          name={name}
-          type="number"
-          min={min}
-          max={max}
-          step={step}
-          value={Number.isFinite(value) ? value : ''}
-          onChange={(event) => onChange(event.currentTarget.value === '' ? 0 : Number(event.currentTarget.value))}
-        />
-        {suffix && <span className="input-suffix">{suffix}</span>}
-      </span>
-      {hint && <span className="field-hint">{hint}</span>}
-    </div>
   )
 }
 
@@ -638,8 +570,8 @@ export default function App() {
   async function importPlan(file?: File) {
     if (!file) return
     try {
-      const imported = JSON.parse(await file.text()) as Partial<PlanInputs>
-      setInputs({ ...DEFAULT_INPUTS, ...imported })
+      const imported = parsePlanInputs(JSON.parse(await file.text()))
+      setInputs(imported)
     } catch {
       window.alert('That file could not be read as a Northstar plan JSON file.')
     }
@@ -648,7 +580,7 @@ export default function App() {
 
   function resetPlan() {
     if (window.confirm('Reset all assumptions to the original sample values?')) {
-      setInputs(DEFAULT_INPUTS)
+      setInputs(createDefaultPlanInputs())
       setDisplayCurrency('EUR')
       setSelectedSpend(1_500)
       setSelectedModes(RETIREMENT_MODES)
