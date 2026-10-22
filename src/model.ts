@@ -6,6 +6,7 @@ import {
 } from './portfolioAllocation'
 import { calculatePortfolioSleeveAssumptions } from './portfolioSleeves'
 import { iteratePortfolioSequenceRuns } from './portfolioSequence'
+import { buildPowerPortfolioConfiguration, type PowerPortfolioConfiguration } from './powerPortfolio'
 
 export type DepositFrequency = 'monthly' | 'quarterly' | 'yearly' | 'irregular'
 export type DisplayCurrency = 'EUR' | 'RON'
@@ -15,25 +16,12 @@ export type RebalanceSchedule = 'never' | 'monthly' | 'annually'
 
 export const RETIREMENT_MODES: RetirementMode[] = ['swr', 'dividends', 'drawdown']
 
-function boundedPercent(value: number): number {
-  return Math.max(0, Math.min(100, value))
-}
-
 function allocationSleeves(input: PlanInputs) {
-  const currentEquityWeight = boundedPercent(input.currentEquityAllocationPercent)
-  const targetEquityWeight = boundedPercent(input.equityAllocationPercent)
-  return [
-    {
-      id: 'equities',
-      currentWeightPercent: currentEquityWeight,
-      targetWeightPercent: targetEquityWeight,
-    },
-    {
-      id: 'bonds',
-      currentWeightPercent: 100 - currentEquityWeight,
-      targetWeightPercent: 100 - targetEquityWeight,
-    },
-  ]
+  return buildPowerPortfolioConfiguration(input).sleeves.map((sleeve) => ({
+    id: sleeve.id,
+    currentWeightPercent: sleeve.currentWeightPercent,
+    targetWeightPercent: sleeve.targetWeightPercent,
+  }))
 }
 
 function totalSleeveBalance(balances: Record<string, number>): number {
@@ -41,17 +29,20 @@ function totalSleeveBalance(balances: Record<string, number>): number {
 }
 
 function powerSleeveReturns(input: PlanInputs, mode: RetirementMode): Record<string, number> {
-  const shared = portfolioAssumptions(input)
-  const modeReturnAdjustment = nominalReturnForMode(input, mode) - shared.nominalReturnPercent
+  const configuration = buildPowerPortfolioConfiguration(input)
+  const { sleeves } = configuration
+  const shared = assumptionsFromPowerConfiguration(configuration)
+  const modeReturnAdjustment = (input.returnOverrides[mode] ?? shared.nominalReturnPercent)
+    - shared.nominalReturnPercent
   const inflation = 1 + input.inflationPercent / 100
   const monthlyRate = (nominalReturnPercent: number, annualFeePercent: number) => {
     const realAnnual = (1 + (nominalReturnPercent + modeReturnAdjustment - annualFeePercent) / 100) / inflation - 1
     return Math.pow(1 + realAnnual, 1 / 12) - 1
   }
-  return {
-    equities: monthlyRate(input.equityNominalReturnPercent, input.equityAnnualFeePercent),
-    bonds: monthlyRate(input.bondNominalReturnPercent, input.bondAnnualFeePercent),
-  }
+  return Object.fromEntries(sleeves.map((sleeve) => [
+    sleeve.id,
+    monthlyRate(sleeve.nominalReturnPercent, sleeve.annualFeePercent),
+  ]))
 }
 
 export interface IncomeStream {
@@ -245,6 +236,22 @@ export interface PortfolioAssumptions {
   volatilityPercent: number
 }
 
+function assumptionsFromPowerConfiguration(
+  configuration: PowerPortfolioConfiguration,
+): PortfolioAssumptions {
+  const derived = calculatePortfolioSleeveAssumptions(
+    configuration.sleeves,
+    configuration.correlations,
+  )
+  return {
+    nominalReturnPercent: derived.weightedGrossNominalReturnPercent,
+    annualFeePercent: derived.weightedAnnualFeePercent,
+    netNominalReturnPercent: derived.netNominalReturnPercent,
+    distributionYieldPercent: derived.weightedCashDistributionYieldPercent,
+    volatilityPercent: derived.volatilityPercent,
+  }
+}
+
 export function portfolioAssumptions(input: PlanInputs): PortfolioAssumptions {
   if (input.portfolioSetupMode !== 'power') {
     return {
@@ -256,35 +263,7 @@ export function portfolioAssumptions(input: PlanInputs): PortfolioAssumptions {
     }
   }
 
-  const sleeves = [
-    {
-      id: 'equities', targetWeightPercent: boundedPercent(input.equityAllocationPercent),
-      nominalReturnPercent: input.equityNominalReturnPercent,
-      volatilityPercent: input.equityVolatilityPercent,
-      annualFeePercent: input.equityAnnualFeePercent,
-      distributionYieldPercent: input.equityDistributionYieldPercent,
-    },
-    {
-      id: 'bonds', targetWeightPercent: 100 - boundedPercent(input.equityAllocationPercent),
-      nominalReturnPercent: input.bondNominalReturnPercent,
-      volatilityPercent: input.bondVolatilityPercent,
-      annualFeePercent: input.bondAnnualFeePercent,
-      distributionYieldPercent: input.bondDistributionYieldPercent,
-    },
-  ]
-  const correlations = {
-    equities: { equities: 1, bonds: Math.max(-1, Math.min(1, input.equityBondCorrelation)) },
-    bonds: { equities: Math.max(-1, Math.min(1, input.equityBondCorrelation)), bonds: 1 },
-  }
-  const derived = calculatePortfolioSleeveAssumptions(sleeves, correlations)
-
-  return {
-    nominalReturnPercent: derived.weightedGrossNominalReturnPercent,
-    annualFeePercent: derived.weightedAnnualFeePercent,
-    netNominalReturnPercent: derived.netNominalReturnPercent,
-    distributionYieldPercent: derived.weightedCashDistributionYieldPercent,
-    volatilityPercent: derived.volatilityPercent,
-  }
+  return assumptionsFromPowerConfiguration(buildPowerPortfolioConfiguration(input))
 }
 
 export function swrFireNumber(annualSpend: number, withdrawalRatePercent: number): number {
@@ -579,15 +558,21 @@ export function runMonteCarlo(
 ): MonteCarloSummary {
   const runs = Math.max(100, Math.min(10_000, Math.round(input.monteCarloRuns)))
   const horizonMonths = Math.max(0, Math.round((input.endAge - input.currentAge) * 12))
-  const portfolio = portfolioAssumptions(input)
+  const powerConfiguration = input.portfolioSetupMode === 'power'
+    ? buildPowerPortfolioConfiguration(input)
+    : undefined
+  const portfolio = powerConfiguration
+    ? assumptionsFromPowerConfiguration(powerConfiguration)
+    : portfolioAssumptions(input)
+  const modeNominalReturn = input.returnOverrides[mode] ?? portfolio.nominalReturnPercent
   const volatility = Math.max(0, portfolio.volatilityPercent / 100)
-  const nominalMean = (nominalReturnForMode(input, mode) - portfolio.annualFeePercent) / 100
+  const nominalMean = (modeNominalReturn - portfolio.annualFeePercent) / 100
   const logMeanAnnual = Math.log(Math.max(0.001, 1 + nominalMean)) - volatility * volatility / 2
   const monthlyLogMean = logMeanAnnual / 12
   const monthlyLogDeviation = volatility / Math.sqrt(12)
   const monthlyInflationFactor = Math.pow(1 + input.inflationPercent / 100, 1 / 12)
   const seedString = [mode, input.currentAge, input.endAge, input.nominalReturnPercent,
-    nominalReturnForMode(input, mode), portfolio.volatilityPercent, input.portfolioSetupMode,
+    modeNominalReturn, portfolio.volatilityPercent, input.portfolioSetupMode,
     input.equityAllocationPercent, input.currentEquityAllocationPercent,
     input.equityNominalReturnPercent, input.equityVolatilityPercent, input.equityAnnualFeePercent,
     input.equityDistributionYieldPercent, input.bondNominalReturnPercent, input.bondVolatilityPercent,
@@ -605,25 +590,15 @@ export function runMonteCarlo(
   const drawdownTargets = mode === 'drawdown'
     ? drawdownTargetsByMonth(input, monthlySpend, horizonMonths)
     : undefined
-  const powerModeReturnAdjustment = nominalReturnForMode(input, mode) - portfolio.nominalReturnPercent
-  const powerReturnRuns = input.portfolioSetupMode === 'power'
+  const powerModeReturnAdjustment = modeNominalReturn - portfolio.nominalReturnPercent
+  const powerReturnRuns = powerConfiguration
     ? iteratePortfolioSequenceRuns(
-      [
-        {
-          id: 'equities',
-          nominalReturnPercent: input.equityNominalReturnPercent + powerModeReturnAdjustment - input.equityAnnualFeePercent,
-          volatilityPercent: input.equityVolatilityPercent,
-        },
-        {
-          id: 'bonds',
-          nominalReturnPercent: input.bondNominalReturnPercent + powerModeReturnAdjustment - input.bondAnnualFeePercent,
-          volatilityPercent: input.bondVolatilityPercent,
-        },
-      ],
-      {
-        equities: { equities: 1, bonds: Math.max(-1, Math.min(1, input.equityBondCorrelation)) },
-        bonds: { equities: Math.max(-1, Math.min(1, input.equityBondCorrelation)), bonds: 1 },
-      },
+      powerConfiguration.sleeves.map((sleeve) => ({
+        id: sleeve.id,
+        nominalReturnPercent: sleeve.nominalReturnPercent + powerModeReturnAdjustment - sleeve.annualFeePercent,
+        volatilityPercent: sleeve.volatilityPercent,
+      })),
+      powerConfiguration.correlations,
       horizonMonths,
       runs,
       seed,
