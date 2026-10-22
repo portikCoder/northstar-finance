@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "vitest run src && npm run test:benchmark-comparison",
+    "test:benchmark-comparison": "node --test scripts/compare-benchmarks.test.mjs",
     "benchmark": "vitest bench",
     "test:e2e": "playwright test"
   },
